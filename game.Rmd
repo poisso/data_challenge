@@ -1,0 +1,200 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+Names: Andrew McDonald and Nikolai Tverdoklheb
+
+```{r}
+example <- read.csv("sample_submission.csv")
+head(example)
+```
+
+```{r}
+test <- read.csv("test.csv")
+train <- read.csv("train.csv")
+
+head(train)
+```
+To get a better understanding of our data lets try and observe the standard deviation of a random sample of features.
+
+```{r}
+dev <- c(1:200)
+c <- 1
+for (i in sample(1:500, 200, replace = FALSE)) {
+  dev[c] <- sd(train[,c(i)])
+  c = c + 1
+}
+plot(dev)
+```
+We conclude from this analysis that the standard deviation for most features is contained between 0 and 40 but a few columns go higher than this threshold we could maybe take advantage of this later.
+
+Lets try to do the same analysis after getting rid of some extreme values.
+
+```{r}
+x <- train
+for(i in 1:500){
+  moy <- mean(x[,i])
+  for (j in 1:1500) {
+    if (x[j, i] > 700 || x[j, i] < 300){
+      x[j, i] <- moy
+    }
+  }
+}
+dev <- c(1:200)
+c <- 1
+for (i in sample(1:500, 200, replace = FALSE)) {
+  dev[c] <- sd(x[,c(i)])
+  c = c + 1
+}
+plot(dev)
+```
+There is no significant improvement in the analysis.
+
+
+```{r}
+library(MASS)
+library(class)
+library(nnet)
+library(caret)
+library(klaR)
+```
+
+```{r}
+pca <- prcomp(train, center=TRUE, scale=TRUE)
+```
+
+```{r}
+variance = (pca$sdev)**2 
+inertia = variance/sum(variance)  
+result = cumsum(inertia)[300]
+cat("Inertia captured by the first 300 principal components: ", result)
+
+```
+
+We can see that the data cannot be explained by a small number of variables, thus it is very difficult to actually observe the data and understand it in a simple way.
+
+For example if we try to observe the data projected on the 2 first components of the pca we get this plot:
+
+```{r}
+library(devtools)
+install_github("vqv/ggbiplot")
+```
+
+```{r}
+library(ggbiplot)
+
+ggbiplot(pca)
+```
+
+These 2 components explain only a few percents of the variability of the data and the plot we get is centered and apparently distributed in a pretty uniform way.
+
+We will test different prediction methods to try and predict the data properly. To get a hint about the accuracy of our method we are going to seperate our training data into 2 groups, 20% of the data will be use for testing and getting an accuracy calculation of our models and the rest will be use for training.
+
+We opted for this very simple method because more complicated k-cross validation has a very long runtime (as the number of observations is pretty high). Thus our prediction of the accuracy of the model may be biaised.
+
+Also for some models we will use the 300 first pca components instead of the whole set for the training. 
+
+```{r}
+train.tr <- train[-c(1:300),]
+train.te <- train[c(1:300),]
+train.pred <- train[c(1:300), c(501)]
+
+train.pca <- as.data.frame(cbind(pca$x[,c(1:300)], as.logical(train.pred)))
+train.pca.tr <- train.pca[-c(1:300),]
+train.pca.te <- train.pca[c(1:300),]
+train.pca.pred <- train[c(1:300), c(501)]
+```
+
+
+
+Logistic prediction:
+
+```{r}
+get_logistic_pred = function(model, data, pos = 1, neg = 0, cut = 0.5) {
+  probs = predict(model, newdata = data)
+  ifelse(probs > cut, pos, neg)
+}
+```
+
+```{r}
+glm_model <- glm(target~., data = train.tr, family = binomial("logit"))
+glm_prediction <- get_logistic_pred(glm_model, train.te)
+mean(glm_prediction == train.pred)
+```
+This model gives a very bad prediction which is close to a random prediction.
+
+Perceptron:
+
+```{r}
+perceptron <-nnet(target~., data = train.tr, skip =TRUE, size =0,maxit=1000)
+perceptron_prediction <- predict(perceptron, train.te)
+
+mean(perceptron_prediction == train.pred)
+
+```
+
+
+
+The perceptron also give a precision close to random precision.
+
+
+LDA:
+
+```{r}
+lda_model <- lda(target~., data = train.tr)
+lda_prediction <- predict(lda_model, train.te)
+mean(lda_prediction$class == train.pred)
+```
+LDA in the whole data gives a result which is bearly better than the other ones.
+
+LDA on the projected data:
+
+
+
+```{r}
+lda_model_2 <- lda(train.pca.tr[,c(301)]~., data = train.pca.tr[,-c(301)])
+lda_prediction_2 <- predict(lda_model_2, train.pca.te)
+mean(lda_prediction_2$class == train.pca.pred)
+```
+With pca before lda the result is slightly better but still not very encouraging.
+
+
+knn:
+
+```{r}
+normalize <- function(x) { (x - min(x))/(max(x) - min(x))}
+```
+
+```{r}
+train.tr.norm <- lapply(train.tr, normalize)
+knn_prediction <- knn(train.tr, train.te, train.tr[,501], k=18)
+mean(knn_prediction == train.pred)
+```
+
+This prediction is the best we got so far.
+
+knn with projected data:
+
+```{r}
+train.pca.tr.norm <- lapply(train.pca.tr, normalize)
+knn_prediction <- knn(train.pca.tr, train.pca.te,cl = train.pca.tr[,c(301)], k=300)
+mean(knn_prediction == train.pred)
+```
+
+Surprisingly this gives a result which is worst than for the unprojected data. A possible reason for this is that the pca we performed does not explain enough of the data to get a correct result with the knn method.
+
+
+
+
+
+
+
+
+
+
+
+
